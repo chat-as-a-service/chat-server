@@ -1,0 +1,118 @@
+version: "3.8"
+services:
+  redis:
+    image: redis:7.2.3
+    restart: always
+    ports:
+      - '6379:6379'
+    command: redis-server --save 20 1
+    volumes:
+      - redis:/data
+  kafka:
+    image: docker.io/bitnami/kafka:3.6
+    ports:
+      - "9092:9092"
+      - "9094:9094"
+    volumes:
+      - "kafka_data:/bitnami"
+    environment:
+      # KRaft settings
+      - KAFKA_CFG_NODE_ID=0
+      - KAFKA_CFG_PROCESS_ROLES=controller,broker
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=0@kafka:9093
+      # Listeners
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://kafka:9092,PLAINTEXT2://kafka:9094,CONTROLLER://:9093
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092,PLAINTEXT2://kafka:9094
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT2:PLAINTEXT
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+
+  es01:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.8.1
+    environment:
+      - node.name=es01
+      - cluster.name=docker-cluster
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.enrollment.enabled=false
+      - xpack.license.self_generated.type=basic
+      - bootstrap.memory_lock=true
+      - cluster.routing.allocation.disk.threshold_enabled=false
+    restart: always
+    volumes:
+      - esdata01:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    mem_limit: 1g
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.8.1
+    environment:
+      - XPACK_SECURITY_ENABLED=false
+      - ELASTICSEARCH_HOSTS=http://es01:9200
+      - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=d1a66dfd-c4d3-4a0a-8290-2abcb83ab3aa
+    volumes:
+      - kibanadata:/usr/share/kibana/data
+    restart: always
+    ports:
+      - "5601:5601"
+    depends_on:
+      - es01
+
+
+  kafka-connect:
+    image: confluentinc/cp-kafka-connect:7.5.2
+    container_name: kafka-connect
+    ports:
+      - '8083:8083'
+    depends_on:
+      - kafka
+      - es01
+    volumes:
+      - ./kafka-connect-es.properties:/etc/kafka-connect/kafka-connect-es.properties
+      - ./connect-plugins:/connect-plugins
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:9094
+      CONNECT_GROUP_ID: 'connect'
+      CONNECT_CONFIG_STORAGE_TOPIC: connect-config
+      CONNECT_OFFSET_STORAGE_TOPIC: connect-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: connect-status
+      CONNECT_KEY_CONVERTER: 'org.apache.kafka.connect.storage.StringConverter'
+      CONNECT_VALUE_CONVERTER: 'org.apache.kafka.connect.json.JsonConverter'
+      CONNECT_REST_ADVERTISED_HOST_NAME: 'connect'
+      CONNECT_REST_PORT: 8083
+      CONNECT_PLUGIN_PATH: /connect-plugins
+      CONNECT_REPLICATION_FACTOR: -1
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: -1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: -1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: -1
+#    command:
+#      - bash
+#      - -c
+#      - |
+#        echo "Installing Connector"
+#        confluent-hub install --no-prompt confluentinc/kafka-connect-elasticsearch:14.0.12
+#        #
+#        echo "Launching Kafka Connect worker"
+#        /etc/confluent/docker/run &
+#        #
+#        sleep infinity
+
+
+volumes:
+#  kafka-volume:
+  zookeeper-volume:
+  kafka_data:
+    driver: local
+  certs:
+    driver: local
+  esdata01:
+    driver: local
+  kibanadata:
+    driver: local
+  redis:
+    driver: local
