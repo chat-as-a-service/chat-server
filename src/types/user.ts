@@ -6,3 +6,9 @@ export interface User {
 export interface ListUsersInChannelPayload {
     channel_uuid: string;
 }
+
+export interface ESUser {
+    id: number;
+    username: string;
+    nickname: string;
+}

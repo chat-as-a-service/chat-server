@@ -33,3 +33,9 @@ export interface GCSAttachmentPutSignedUrlGenResult {
   headers: Record<string, string>;
   bucket: string;
 }
+export interface ESAttachment {
+  bucket_name: string;
+  file_key: string;
+  original_file_name: string;
+  content_type: string;
+}

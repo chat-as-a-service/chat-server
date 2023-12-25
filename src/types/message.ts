@@ -1,11 +1,13 @@
 import { type User } from './user';
-import { ReactionType } from './reaction';
-import { AttachmentEntity, AttachmentResponse } from './attachment';
+import { type ReactionType } from './reaction';
+import { type AttachmentEntity, type AttachmentResponse } from './attachment';
 
 export interface ReplyMessageRequest {
   parentMessageUuid: string;
   message: string;
 }
+
+
 
 export type MentionType = 'USERS' | 'CHANNEL';
 
@@ -108,6 +110,7 @@ export interface LoadPreviousMessagesPayload {
   channel_uuid: string;
   first_message_uuid?: string;
   first_message_ts?: number;
+  parent_message_uuid?: string;
 }
 export interface LoadPreviousMessagesResponse {
   messages: MessageType[];

@@ -1,11 +1,18 @@
 {
-  "extends": "@tsconfig/node20/tsconfig.json",
   "include": ["src/**/*"],
 //  "exclude": ["node_modules"],
+
   "compilerOptions": {
+    "lib": ["es2023", "dom"],
+    "module": "node16",
+    "target": "es2022",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "moduleResolution": "node16",
     "allowJs": true,
     "outDir": "build",
-    "lib": ["es2023", "dom"],
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,
     "strictPropertyInitialization": false

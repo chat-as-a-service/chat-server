@@ -51,7 +51,7 @@ postgresqlDataSource
 export let io: Server<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, any>;
 
 (async () => {
-  await kafkaInit();
+  void kafkaInit();
   await redisInit();
 
   await redisClient.sAdd('bad-words', ['shit', 'poop']);
@@ -135,8 +135,8 @@ export let io: Server<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, any>
     });
   });
 
-  async function onSignal() {
-    console.log('server is starting cleanup');
+  async function onSignal(): Promise<unknown> {
+    console.log('server is starting cleanup because it has received SIGTERM');
     return await Promise.all([
       postgresqlDataSource.destroy(),
       redisClient.disconnect(),
@@ -145,13 +145,20 @@ export let io: Server<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, any>
     ]);
   }
 
-  async function onShutdown() {
+  async function onShutdown(): Promise<void> {
+    await postgresqlDataSource.destroy();
+    await redisClient.disconnect();
+    await kafkaProducer.disconnect();
+    await kafkaConsumer.disconnect();
     console.log('cleanup finished, server is shutting down');
   }
 
-  async function healthCheck() {
+  async function healthCheck(): Promise<void> {
     // `state.isShuttingDown` (boolean) shows whether the server is shutting down or not
-    await Promise.resolve();
+    await postgresqlDataSource.query('SELECT 1');
+    if(!redisClient.isOpen){
+      throw new Error('Redis is not connected');
+    }
   }
 
   const options: TerminusOptions = {
@@ -161,8 +168,8 @@ export let io: Server<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, any>
     },
 
     timeout: 1000,
-    onSignal: onSignal,
-    onShutdown: onShutdown,
+    onSignal,
+    onShutdown,
   };
 
   createTerminus(server, options);

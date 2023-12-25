@@ -28,14 +28,26 @@ import { AttachmentGcsRepository } from '../repository/attachment.gcs.repository
 import { RedisMessageRepository } from '../repository/message.redis.repository';
 import { type CustomResponse } from '../types/common';
 import { redisClient } from '../infrastructure/redis';
+import tracer from '../infrastructure/datadog';
+import { type NewMessageKafkaPayload } from '../dto/kafka/message.kafka.dto';
+import { MessageEsRepository } from '../repository/es/message.es.repository';
 
-type CachedUser = { username: string; nickname: string };
+interface CachedUser {
+  username: string;
+  nickname: string;
+}
+
 export default (io: Server, socket: Socket): void => {
   const customSocket = socket as CustomSocket;
   const newMessage = async (
     msg: CreateMessagePayload,
     ack: (res: CustomResponse<MessageType>) => void,
   ): Promise<void> => {
+    const span = tracer.startSpan('newMessage');
+    span.setTag('application_uuid', customSocket.application_uuid);
+    span.setTag('username', customSocket.username);
+    span.setTag('channel_uuid', msg.channel_uuid);
+
     const createdAt = new Date();
     const channelRedisKey = `channel-member:${customSocket.application_uuid}:${msg.channel_uuid}`;
     const userRedisKey = `user:${customSocket.application_uuid}:${customSocket.username}`;
@@ -57,10 +69,10 @@ export default (io: Server, socket: Socket): void => {
         user = {
           username: userEntity.username,
           nickname: userEntity.nickname,
-        }
+        };
         await redisClient.set(userRedisKey, JSON.stringify(user));
       }
-    }else {
+    } else {
       user = JSON.parse(userCache);
       if (user == null) {
         ack({
@@ -70,7 +82,6 @@ export default (io: Server, socket: Socket): void => {
         return;
       }
     }
-
 
     const channelUserCache = await redisClient.hGet(
       channelRedisKey,
@@ -89,11 +100,7 @@ export default (io: Server, socket: Socket): void => {
         });
         return;
       } else {
-        await redisClient.hSet(
-          channelRedisKey,
-          user.username,
-          "true"
-        );
+        await redisClient.hSet(channelRedisKey, user.username, 'true');
       }
     }
 
@@ -115,6 +122,7 @@ export default (io: Server, socket: Socket): void => {
     }
 
     const newMsgUuid = randomUUID();
+
     const response: MessageType = {
       uuid: newMsgUuid,
       user: {
@@ -139,19 +147,38 @@ export default (io: Server, socket: Socket): void => {
       created_at: createdAt.valueOf(),
       updated_at: createdAt.valueOf(),
     };
-    await KafkaMessageRepository.sendMessageSave({
-      ...msg,
+
+    const newMsgKafkaPayload: NewMessageKafkaPayload = {
+      uuid: newMsgUuid,
+      message: msg.message,
+      user: {
+        username: user.username,
+        nickname: user.nickname,
+      },
       application_uuid: customSocket.application_uuid,
-      message_uuid: newMsgUuid,
+      channel_uuid: msg.channel_uuid,
+      mention_type: msg.mention_type,
+      mentioned_usernames: [],
+      attachments: msg.attachments,
+      parent_message_uuid: parentMessage?.uuid,
       created_at: createdAt.valueOf(),
-      username: user.username,
-    });
+      updated_at: createdAt.valueOf(),
+    };
+    const kafkaHeaders = {};
+    tracer.inject(span, 'text_map', kafkaHeaders);
+    console.debug('injected span into kafka headers', kafkaHeaders);
+    await KafkaMessageRepository.sendMessageSave(
+      newMsgKafkaPayload,
+      kafkaHeaders,
+    );
     io.to(msg.channel_uuid).emit('message:new', response);
+    console.debug(`emitted message:new to channel ${msg.channel_uuid}`);
 
     ack({
       result: 'success',
       data: response,
     });
+    span.finish();
   };
 
   const newReply = async (
@@ -229,15 +256,16 @@ export default (io: Server, socket: Socket): void => {
     payload: ListThreadPayload,
     ack: (replies: CustomResponse<MessageType[]>) => void,
   ): Promise<void> => {
-    const messageReplies = await MessageRepository.getMessageReplies(
-      payload.message_uuid,
-    );
-
     const channel = await ChannelRepository.findUserInChannel(
       payload.channel_uuid,
       customSocket.username,
       customSocket.application_uuid,
     );
+
+    const messageReplies = await MessageRepository.getMessageReplies(
+      payload.message_uuid,
+    );
+
     if (channel == null) {
       ack({
         result: 'error',
@@ -397,129 +425,98 @@ export default (io: Server, socket: Socket): void => {
       });
       return;
     }
-    try {
-      const previousMessages = await postgresqlDataSource.manager.transaction(
-        async manager => {
-          const messageRepository = manager.withRepository(MessageRepository);
-          let firstMessage;
-          if (payload.first_message_uuid) {
-            firstMessage = await messageRepository.findOneBy({
-              uuid: payload.first_message_uuid,
-            });
-            if (firstMessage == null) {
-              throw new Error('message not found');
-            }
-          }
 
-          return await messageRepository.getPreviousMessagesInChannel(
-            payload.channel_uuid,
-            101,
-            firstMessage?.id,
-            payload.first_message_ts != null
-              ? new Date(payload.first_message_ts)
-              : undefined,
-          );
-        },
+    const channel = await ChannelRepository.findUserInChannel(
+      payload.channel_uuid,
+      customSocket.username,
+      customSocket.application_uuid,
+    );
+    if (channel == null) {
+      ack({
+        result: 'error',
+        error_msg: 'channel not found',
+      });
+      return;
+    }
+
+    try {
+      let firstMessage;
+      if (payload.first_message_uuid != null) {
+        firstMessage = await MessageEsRepository.getMessage(
+          customSocket.application_uuid,
+          payload.channel_uuid,
+          payload.first_message_uuid,
+        );
+        if (firstMessage == null) {
+          ack({
+            result: 'error',
+            error_msg: 'message not found',
+          });
+          return;
+        }
+      }
+      const pageSize = 100;
+
+      const previousMessages = await MessageEsRepository.listPreviousMessages(
+        customSocket.application_uuid,
+        payload.channel_uuid,
+        pageSize,
+        firstMessage?.id,
+        payload.first_message_ts != null
+          ? new Date(payload.first_message_ts)
+          : undefined,
+        payload.parent_message_uuid,
       );
 
       const messages = await Promise.all(
-        previousMessages
-          .reverse()
-          .filter((_, i) => {
-            if (previousMessages.length > 100) {
-              return i > 0;
-            }
-            return true;
-          })
-          .map(async message => {
-            const repliesByUserCnt = message.childMessages.reduce<
-              Record<string, Message[]>
-            >((acc, msg) => {
-              if (
-                !Object.prototype.hasOwnProperty.call(acc, msg.user.username)
-              ) {
-                acc[msg.user.username] = [];
-              }
-              acc[msg.user.username].push(msg);
-              return acc;
-            }, {});
-            const top5MostRepliedUsers = Object.entries(repliesByUserCnt)
-              .sort((a, b) => b[1].length - a[1].length)
-              .reverse()
-              .slice(5)
-              .map(([username, messages]) => messages[0].user);
-
-            const msg: MessageType = {
-              uuid: message.uuid,
-              message: message.message,
-              user: {
-                username: message.user.username,
-                nickname: message.user.nickname,
-              },
-              mention_type: message.mentionType,
-              mentioned_users: message.mentionedUsers.map(user => {
-                return {
-                  username: user.username,
-                  nickname: user.nickname,
-                };
-              }),
-              created_at: message.createdAt.valueOf(),
-              updated_at: message.updatedAt.valueOf(),
-              channel_uuid: message.channel.uuid,
-              thread_info:
-                message.childMessages.length > 0
-                  ? {
-                      reply_count: message.childMessages.length,
-                      most_replies: top5MostRepliedUsers,
-                      last_replied_at: message.childMessages
-                        .sort(
-                          (a, b) =>
-                            b.createdAt.valueOf() - a.createdAt.valueOf(),
-                        )[0]
-                        .createdAt.valueOf(),
-                      updated_at: message.updatedAt.valueOf(), // todo: update with real logic
-                    }
-                  : undefined,
-              reactions: message.reactions.map(reaction => {
-                return {
-                  reaction: reaction.reaction,
-                  user: reaction.user,
-                  created_at: reaction.createdAt.valueOf(),
-                };
-              }),
-              attachments: await Promise.all(
-                message.attachments.map(async attachment => ({
-                  original_file_name: attachment.original_file_name,
-                  content_type: attachment.content_type,
-                  download_signed_url:
-                    await AttachmentGcsRepository.signDownloadLink(
-                      attachment.file_key,
-                      attachment.original_file_name,
-                    ),
-                })),
-              ),
-              og_tag:
-                message.linkPreview != null
-                  ? {
-                      url: message.linkPreview.url,
-                      title: message.linkPreview.title,
-                      description: message.linkPreview.description,
-                      image: message.linkPreview.imageLink,
-                      image_width: message.linkPreview.imageWidth,
-                      image_height: message.linkPreview.imageHeight,
-                      image_alt: message.linkPreview.imageAlt,
-                    }
-                  : undefined,
-            };
-            return msg;
-          }),
+        previousMessages.reverse().map(async message => {
+          const msg: MessageType = {
+            uuid: message.uuid,
+            message: message.message,
+            user: {
+              username: message.user.username,
+              nickname: message.user.nickname,
+            },
+            mention_type: message.mention_type,
+            mentioned_users: message.mentioned_users.map(user => {
+              return {
+                username: user.username,
+                nickname: user.nickname,
+              };
+            }),
+            created_at: message.created_at,
+            updated_at: message.updated_at,
+            channel_uuid: message.channel.uuid,
+            thread_info: message.thread_info,
+            reactions: message.reactions.map(reaction => {
+              return {
+                reaction: reaction.reaction,
+                user: reaction.user,
+                created_at: reaction.created_at,
+              };
+            }),
+            attachments: await Promise.all(
+              message.attachments.map(async attachment => ({
+                original_file_name: attachment.original_file_name,
+                content_type: attachment.content_type,
+                download_signed_url:
+                  await AttachmentGcsRepository.signDownloadLink(
+                    attachment.file_key,
+                    attachment.original_file_name,
+                  ),
+              })),
+            ),
+            og_tag: message.og_tag,
+          };
+          return msg;
+        }),
       );
 
       ack({
         result: 'success',
         data: {
           messages,
-          has_previous: previousMessages.length === 101,
+          has_previous: previousMessages.length > 0,
         },
       });
     } catch (e) {
@@ -542,21 +539,40 @@ export default (io: Server, socket: Socket): void => {
 
   const deleteMessage = async (
     payload: DeleteMessagePayload,
+    ack: (res: CustomResponse<void>) => void,
   ): Promise<void> => {
-    const message = await MessageRepository.getMessage(
-      customSocket.application_uuid,
-      payload.channel_uuid,
-      payload.message_uuid,
-      customSocket.username,
-    );
-    if (message == null) {
-      console.log(
-        `user ${customSocket.username} tried to delete message ${payload.message_uuid} but it does not exist`,
+    await postgresqlDataSource.manager.transaction(async manager => {
+      const messageRepository = manager.withRepository(MessageRepository);
+      const message = await messageRepository.getMessage(
+        customSocket.application_uuid,
+        payload.channel_uuid,
+        payload.message_uuid,
+        customSocket.username,
       );
-      return;
-    }
-    await MessageRepository.delete({ id: message.id });
-    io.emit('message:deleted', message.uuid);
+      if (message == null) {
+        console.log(
+          `user ${customSocket.username} tried to delete message ${payload.message_uuid} but it does not exist`,
+        );
+        ack({
+          result: 'error',
+          error_msg: `Could not find message to delete (uuid: ${payload.message_uuid})`,
+        });
+        return;
+      }
+
+      await messageRepository.delete({ id: message.id });
+      await MessageEsRepository.deleteMessage(
+        customSocket.application_uuid,
+        payload.channel_uuid,
+        payload.message_uuid,
+        customSocket.username
+      );
+      ack({
+        result: 'success',
+      });
+      io.emit('message:deleted', message.uuid);
+    });
+
   };
 
   const editMessage = async (
@@ -670,7 +686,7 @@ export default (io: Server, socket: Socket): void => {
       }),
     };
 
-    io.emit('message:updated', response);
+    io.to(updatedMessageEntity.channel.uuid).emit('message:updated', response);
     ack();
   };
 

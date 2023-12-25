@@ -1,59 +1,55 @@
-import puppeteer from 'puppeteer-extra';
 import { type LinkPreviewOgScrapedResult } from '../types/link-preview';
+import axios from 'axios';
+import * as cheerio from 'cheerio';
 
 export const LinkPreviewWebRepository = {
   async fetchOgTags(link: string): Promise<LinkPreviewOgScrapedResult> {
-    const browser = await puppeteer.launch({
-      headless: 'new',
+    // Fetching the HTML content of the page
+    const { data } = await axios.get(link, {
+      timeout: 10000,
     });
-    const page = await browser.newPage();
-    await page.goto(link, {
-      waitUntil: 'domcontentloaded',
+    const $ = cheerio.load(data);
+    const ogTags: LinkPreviewOgScrapedResult = {
+      title: '',
+    };
+
+    // Selecting all meta tags with properties that start with 'og:'
+    $('meta[property^="og:"]').each((i, elem) => {
+      const property = $(elem).attr('property');
+      const content = $(elem).attr('content');
+      const key = property?.replace('og:', '');
+      const value = content?.trim() ?? undefined;
+      if (value == null || value === '') return;
+      switch (key) {
+        case 'title':
+          ogTags.title = value;
+          break;
+        case 'description':
+          ogTags.description = value;
+          break;
+        case 'image':
+        case 'image:url':
+        case 'image:secure_url':
+          ogTags.image = value;
+          break;
+        case 'image:type':
+          ogTags.imageType = value;
+          break;
+        case 'image:width':
+          ogTags.imageWidth = Number(value);
+          break;
+        case 'image:height':
+          ogTags.imageHeight = Number(value);
+          break;
+        case 'image:alt':
+          ogTags.imageAlt = value;
+          break;
+      }
     });
 
-    const ogTags = await page.evaluate(async () => {
-      const ogTags: LinkPreviewOgScrapedResult = {
-        title: '',
-      };
-      document.querySelectorAll('meta').forEach((meta: HTMLMetaElement) => {
-        const property = meta.getAttribute('property');
-        if (property?.includes('og:') === true) {
-          const key = property.replace('og:', '');
-          const value = meta.getAttribute('content')?.trim() ?? undefined;
-          if (value == null || value === '') return;
-          switch (key) {
-            case 'title':
-              ogTags.title = value;
-              break;
-            case 'description':
-              ogTags.description = value;
-              break;
-            case 'image':
-            case 'image:url':
-            case 'image:secure_url':
-              ogTags.image = value;
-              break;
-            case 'image:type':
-              ogTags.imageType = value;
-              break;
-            case 'image:width':
-              ogTags.imageWidth = Number(value);
-              break;
-            case 'image:height':
-              ogTags.imageHeight = Number(value);
-              break;
-            case 'image:alt':
-              ogTags.imageAlt = value;
-              break;
-          }
-        }
-      });
-      return ogTags;
-    });
     if (ogTags.title === '') {
-      ogTags.title = await page.title();
+      ogTags.title = $('title').text();
     }
-    await browser.close();
     return ogTags;
   },
 };

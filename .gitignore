@@ -207,3 +207,4 @@ dist
 .pnp.*
 .env.local
 build
+config/

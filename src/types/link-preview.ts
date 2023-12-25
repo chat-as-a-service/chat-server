@@ -1,8 +1,4 @@
 
-export interface LinkPreviewKafkaPayload {
-    message_id: number;
-    link: string;
-}
 
 export interface LinkPreviewOgScrapedResult {
     title: string;

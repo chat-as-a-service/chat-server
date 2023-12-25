@@ -1,7 +1,6 @@
 import {
   Column,
   Entity,
-  Generated,
   JoinColumn,
   JoinTable,
   ManyToMany,
@@ -15,7 +14,7 @@ import { Channel } from './channel.entity';
 import { User } from './user.entity';
 import { MentionType } from '../types/message';
 import { LinkPreview } from './link-preview.entity';
-import { AttachmentEntity } from '../types/attachment';
+import { type AttachmentEntity } from '../types/attachment';
 
 @Entity()
 export class Message extends AuditingBaseEntity {
@@ -23,7 +22,6 @@ export class Message extends AuditingBaseEntity {
   id: number;
 
   @Column({ name: 'uuid', type: 'uuid' })
-  @Generated('uuid')
   uuid: string;
 
   @ManyToOne(type => User)
@@ -71,4 +69,11 @@ export class Message extends AuditingBaseEntity {
     nullable: false,
   })
   attachments: AttachmentEntity[];
+
+  @Column({
+    name: 'deleted_at',
+    type: 'timestamp with time zone',
+    nullable: true,
+  })
+  deletedAt?: Date;
 }

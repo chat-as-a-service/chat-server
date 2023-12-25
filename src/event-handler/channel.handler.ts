@@ -5,12 +5,12 @@ import { MessageRepository } from '../repository/message.repository';
 import { type MessageType } from '../types/message';
 import { type Message } from '../entity/message.entity';
 import { AttachmentGcsRepository } from '../repository/attachment.gcs.repository';
-import { ChannelListRes, ChannelType } from '../types/channel';
-import { CustomResponse } from '../types/common';
+import { type ChannelListRes, type ChannelType } from '../types/channel';
+import { type CustomResponse } from '../types/common';
 import { postgresqlDataSource } from '../infrastructure/database';
 import { UserRepository } from '../repository/user.repository';
 import { ChannelUsers } from '../entity/channel-users.entity';
-import { Channel } from '../entity/channel.entity';
+import { type Channel } from '../entity/channel.entity';
 
 export default (io: Server, socket: Socket): void => {
   const customSocket = socket as CustomSocket;

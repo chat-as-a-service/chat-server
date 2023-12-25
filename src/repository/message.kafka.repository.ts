@@ -1,31 +1,44 @@
 import { kafkaProducer } from '../infrastructure/kafka';
-import { type CreateMessagePayload, type MessageType } from '../types/message';
-import { type LinkPreviewKafkaPayload } from '../types/link-preview';
+import {
+  type LinkPreviewKafkaPayload,
+  type NewMessageKafkaPayload,
+} from '../dto/kafka/message.kafka.dto';
+import { type ESMessage } from '../dto/es/message.es.dto';
 
 export const KafkaMessageRepository = {
-  async sendMessage(message: MessageType) {
+  async sendMessage(message: ESMessage) {
     await kafkaProducer.send({
       topic: 'chat-message',
       messages: [{ value: JSON.stringify(message) }],
     });
   },
+
   async sendMessageSave(
-    message: CreateMessagePayload & {
-      application_uuid: string;
-      message_uuid: string;
-      created_at: number;
-      username: string;
-    },
+    message: NewMessageKafkaPayload,
+    headers?: Record<string, string>,
   ) {
     await kafkaProducer.send({
       topic: 'chat-message-save',
-      messages: [{ value: JSON.stringify(message) }],
+      messages: [
+        {
+          headers,
+          key: message.channel_uuid,
+          value: JSON.stringify(message),
+        },
+      ],
     });
   },
 
-  async queueLinkPreview(messageId: number, link: string) {
+  async queueLinkPreview(
+    appUuid: string,
+    channelUuid: string,
+    messageUuid: string,
+    link: string,
+  ) {
     const payload: LinkPreviewKafkaPayload = {
-      message_id: messageId,
+      application_uuid: appUuid,
+      channel_uuid: channelUuid,
+      message_uuid: messageUuid,
       link,
     };
     await kafkaProducer.send({
@@ -37,7 +50,7 @@ export const KafkaMessageRepository = {
       ],
     });
     console.debug(
-      `Queued link preview for message ${messageId}, link: ${link}`,
+      `Queued link preview for message ${messageUuid}, link: ${link}`,
     );
   },
 };

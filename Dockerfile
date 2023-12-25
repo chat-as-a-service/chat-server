@@ -10,4 +10,5 @@ COPY build/ .
 
 CMD [ "node", "index.js" ]
 # tsc && docker buildx build --push -t coldcup2020/wingflo-chat-server:v0.1.5 --platform linux/amd64 .
+# tsc && docker buildx build --push -t coldcup2020/wingflo-chat-server:latest --platform linux/amd64 .
 
