@@ -3,10 +3,10 @@ import { type CustomSocket } from '../types/socket';
 import { ChannelRepository } from '../repository/channel.repository';
 import { AttachmentGcsRepository } from '../repository/attachment.gcs.repository';
 import {
-  NewAttachmentUploadSignedUrlPayload,
-  NewAttachmentUploadSignedUrlResponse,
+  type NewAttachmentUploadSignedUrlPayload,
+  type NewAttachmentUploadSignedUrlResponse,
 } from '../types/attachment';
-import { CustomResponse } from '../types/common';
+import { type CustomResponse } from '../types/common';
 
 export default (io: Server, socket: Socket): void => {
   const customSocket = socket as CustomSocket;

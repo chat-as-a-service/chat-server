@@ -1,7 +1,7 @@
 import { googleCloudStorage } from '../infrastructure/gcs';
 import { type GetSignedUrlConfig } from '@google-cloud/storage';
 import { randomUUID } from 'crypto';
-import { GCSAttachmentPutSignedUrlGenResult } from '../types/attachment';
+import { type GCSAttachmentPutSignedUrlGenResult } from '../types/attachment';
 
 const bucketName = 'caas-attachments';
 export const AttachmentGcsRepository = {

@@ -5,12 +5,19 @@ import { MessageRepository } from '../repository/message.repository';
 import { type MessageType } from '../types/message';
 import { type Message } from '../entity/message.entity';
 import { AttachmentGcsRepository } from '../repository/attachment.gcs.repository';
-import { type ChannelListRes, type ChannelType } from '../types/channel';
+import {
+  type ChannelListRes,
+  ChannelMemberListPayload,
+  type ChannelMemberListRes,
+  type ChannelType,
+} from '../types/channel';
 import { type CustomResponse } from '../types/common';
 import { postgresqlDataSource } from '../infrastructure/database';
 import { UserRepository } from '../repository/user.repository';
 import { ChannelUsers } from '../entity/channel-users.entity';
 import { type Channel } from '../entity/channel.entity';
+import { ChannelUsersRepository } from '../repository/channel-users.repository';
+import { type z } from 'zod';
 
 export default (io: Server, socket: Socket): void => {
   const customSocket = socket as CustomSocket;
@@ -24,6 +31,9 @@ export default (io: Server, socket: Socket): void => {
         async manager => {
           const channelRepository = manager.withRepository(ChannelRepository);
           const userRepository = manager.withRepository(UserRepository);
+          const channelUsersRepository = manager.withRepository(
+            ChannelUsersRepository,
+          );
           const channel = await channelRepository.findChannelByUuid(
             customSocket.application_uuid,
             channelUuid,
@@ -39,7 +49,7 @@ export default (io: Server, socket: Socket): void => {
           if (user == null) {
             throw new Error(`user ${customSocket.username} does not exist`);
           }
-          const channelWithUser = await ChannelRepository.findUserInChannel(
+          const channelWithUser = await channelRepository.findUserInChannel(
             channelUuid,
             customSocket.username,
             customSocket.application_uuid,
@@ -56,8 +66,30 @@ export default (io: Server, socket: Socket): void => {
             channelUser.createdAt = now;
             channelUser.updatedBy = user.username;
             channelUser.updatedAt = now;
+            channelUser.isOnline = true;
+            channelUser.isOperator = false; // todo: update with real logic
+            channelUser.lastSeenAt = now;
             await manager.save(channelUser);
+          } else {
+            const existingChannelUser = await channelUsersRepository.findOneBy({
+              channel: {
+                id: channel.id,
+              },
+              user: {
+                id: user.id,
+              },
+            });
+            if (existingChannelUser == null) {
+              throw new Error(
+                `user ${customSocket.username} does not exist in channel ${channelUuid}`,
+              );
+            } else {
+              existingChannelUser.isOnline = true;
+              existingChannelUser.lastSeenAt = new Date();
+              await manager.save(existingChannelUser);
+            }
           }
+
           return channel;
         },
       );
@@ -193,7 +225,7 @@ export default (io: Server, socket: Socket): void => {
 
   const listChannels = async (
     ack: (res: CustomResponse<ChannelListRes[]>) => void,
-  ) => {
+  ): Promise<void> => {
     const channels = await ChannelRepository.listChannels(
       customSocket.application_uuid,
     );
@@ -202,7 +234,7 @@ export default (io: Server, socket: Socket): void => {
       data: channels.map(channel => ({
         uuid: channel.uuid,
         name: channel.name,
-        user_count: channel.userCount!,
+        user_count: channel.userCount ?? 0,
         max_members: channel.maxMembers,
         created_at: channel.createdAt.valueOf(),
         updated_at: channel.updatedAt.valueOf(),
@@ -210,7 +242,58 @@ export default (io: Server, socket: Socket): void => {
     });
   };
 
+  const listChannelMembers = async (
+    payload: z.infer<typeof ChannelMemberListPayload>,
+    ack: (res: CustomResponse<ChannelMemberListRes>) => void,
+  ): Promise<void> => {
+    try {
+      const parsedPayload = ChannelMemberListPayload.parse(payload);
+      const channelMembers = await postgresqlDataSource.manager.transaction(
+        async manager => {
+          const channelRepository = manager.withRepository(ChannelRepository);
+          const channelUsersRepository = manager.withRepository(
+            ChannelUsersRepository,
+          );
+          const channel = await channelRepository.findChannelByUuid(
+            customSocket.application_uuid,
+            parsedPayload.channel_uuid,
+          );
+          if (channel == null) {
+            throw new Error(`channel ${payload.channel_uuid} does not exist`);
+          }
+
+          return await channelUsersRepository.listUsersInChannel(
+            parsedPayload.channel_uuid,
+            parsedPayload.order,
+            parsedPayload.limit,
+            parsedPayload.token,
+          );
+        },
+      );
+
+      ack({
+        result: 'success',
+        data: {
+          members: channelMembers.map(channelMember => ({
+            username: channelMember.user.username,
+            nickname: channelMember.user.nickname,
+            is_online: channelMember.isOnline,
+            is_operator: channelMember.isOperator,
+            last_seen_at: channelMember.lastSeenAt?.valueOf(),
+          })),
+          next: channelMembers[channelMembers.length - 1].id,
+        },
+      });
+    } catch (err) {
+      ack({
+        result: 'error',
+        error_msg: (err as Error).message,
+      });
+    }
+  };
+
   socket.on('channel:join', joinChannel);
   socket.on('channel:get', getChannel);
   socket.on('channel:list', listChannels);
+  socket.on('channel:list-members', listChannelMembers);
 };

@@ -9,6 +9,7 @@
     "build-run": "npm run tsc && node build/index.js",
     "lint": "eslint --ext .js,.ts .",
     "format": "prettier --write \"**/*.+(js|ts|json)\"",
+    "lint-apply": "npm run lint -- --fix && npm run format",
     "tsc": "tsc --build"
   },
   "keywords": [],
