@@ -20,6 +20,8 @@ import { createTerminus, type TerminusOptions } from '@godaddy/terminus';
 import { createAdapter } from '@socket.io/redis-streams-adapter';
 import { ProfilingIntegration } from '@sentry/profiling-node';
 import * as Sentry from '@sentry/node';
+import { ChannelUsersRepository } from './repository/channel-users.repository';
+import { UserRepository } from './repository/user.repository';
 
 process.env.TZ = 'Etc/UTC';
 
@@ -113,8 +115,31 @@ export let io: Server<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, any>
     );
     socket.emit('connectAck', {});
 
-    socket.on('disconnect', () => {
-      console.log('user disconnected');
+    socket.conn.on('packet', ({ type }) => {
+      if (type === 'pong') {
+        void (async () => {
+          const user = await UserRepository.findOneBy({
+            username: customTypedSocket.username,
+          });
+          if (user != null) {
+            await ChannelUsersRepository.updateLastSeenAtForAllOnlineChannels(
+              user.id,
+            );
+          }
+        })();
+      }
+    });
+
+    socket.on('disconnect', async () => {
+      console.log(`user ${customTypedSocket.username} disconnected`);
+      const user = await UserRepository.findOneBy({
+        username: customTypedSocket.username,
+      });
+      if (user != null) {
+        await ChannelUsersRepository.markUserAsOfflineForAllOnlineChannels(
+          user.id,
+        );
+      }
     });
 
     socket.on('listMessageThreads', async (messageUuid: string, ack) => {

@@ -15,13 +15,4 @@ export const UserRepository = dataSource.getRepository(User).extend({
       .where('user.username IN (:...usernames)', { usernames })
       .getMany();
   },
-
-  async listUsersInChannel(channelUuid: string, appUuid: string) {
-    return await this.createQueryBuilder('user')
-      .leftJoinAndSelect('user.joinedChannels', 'channel')
-      .leftJoinAndSelect('channel.application', 'application')
-      .where('channel.uuid = :channelUuid', { channelUuid })
-      .andWhere('application.uuid = :appUuid', { appUuid })
-      .getMany();
-  },
 });
